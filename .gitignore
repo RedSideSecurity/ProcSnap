@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.db
+case-*/
+triage-*/
+*-report.html
+/out/
+*-analysis/
+procsnap-*.tar.gz*
