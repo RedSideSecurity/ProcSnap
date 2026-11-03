@@ -46,7 +46,7 @@ import zlib
 from collections import Counter, defaultdict
 from datetime import datetime
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 HZ = os.sysconf("SC_CLK_TCK")
 PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
 

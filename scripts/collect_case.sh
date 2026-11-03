@@ -17,7 +17,7 @@
 # Then, on the analysis machine:
 #   ./procsnap_analyze.py procsnap-<host>-<time>.tar.gz --vt-key "$VT_API_KEY"
 set -u
-VERSION=2.0.0
+VERSION=2.0.1
 OUT=/var/tmp
 WATCH=""
 INTERVAL=5s
