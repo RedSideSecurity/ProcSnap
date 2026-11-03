@@ -90,7 +90,7 @@ json.dump({"tool": "procsnap", "kind": "case", "collector_version": ver, "host":
 PYEOF
 
 log "packaging"
-if tar -C "$OUT" -czf "$CASE.tar.gz" "$NAME" && sha256sum "$CASE.tar.gz" > "$CASE.tar.gz.sha256"; then
+if tar -C "$OUT" -czf "$CASE.tar.gz" "$NAME" && ( cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" ); then   # bare name: checkable after copying
   [ -z "$KEEP" ] && rm -rf "$CASE"
 else
   # never delete the evidence when the archive could not be written (disk full...)

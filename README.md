@@ -17,6 +17,125 @@ you can attach to the case.
 <sub>All screenshots come from `web01`, a synthetic demo host built in a throwaway container
 (`docs/demo/plant_demo_host.sh` + `tests/live_attack_sim.sh`). No real system data.</sub>
 
+## Quick start
+
+Step-by-step recipes for the three common jobs. Copy the commands as they are. You need
+a Debian or Ubuntu host with Python 3.8+ (already installed on every supported release)
+and root (`sudo`). Nothing else is installed.
+
+**Get the tool** (on your own machine, and on the host if you run it there):
+
+```bash
+git clone https://github.com/RedSideSecurity/ProcSnap.git
+cd ProcSnap
+```
+
+No git? Download the files directly instead:
+
+```bash
+for f in procsnap.py procsnap_viz.py procsnap_analyze.py scripts/collect_case.sh; do
+  curl -fLO "https://raw.githubusercontent.com/RedSideSecurity/ProcSnap/main/$f"
+done
+chmod +x procsnap*.py collect_case.sh
+```
+
+Keep the files together in one folder: `procsnap_viz.py` and `procsnap_analyze.py` both
+need `procsnap.py` next to them.
+
+| Where | Files needed |
+|---|---|
+| Suspect host | `procsnap.py` (+ `collect_case.sh` for recipe B) |
+| Your workstation | the whole folder (`procsnap.py`, `procsnap_viz.py`, `procsnap_analyze.py`) |
+
+### Recipe A: is this host compromised? (one machine, about a minute)
+
+```bash
+sudo ./procsnap.py triage
+```
+
+1. The terminal prints the verdict and the critical/high findings.
+2. Everything is saved in a new folder `triage-<host>-<time>/`. Open
+   `triage-<host>-<time>/triage.html` in a browser (on a server, copy it to your own
+   machine first: `scp user@host:'~/ProcSnap/triage-*/triage.html' .`).
+3. The report works offline. Each finding says why it matters, what to check next, and
+   shows the evidence. Suspicious files are copied to `evidence/` (read-only) and hashed
+   in `HASHES.txt`.
+
+### Recipe B: collect a case on the suspect, analyse it on your workstation
+
+Use this for a real incident: nothing on the suspect touches the network, and the
+VirusTotal and geolocation lookups happen on your machine.
+
+```bash
+# 1. on your workstation: copy the collector to the suspect host
+scp procsnap.py scripts/collect_case.sh root@SUSPECT:/root/
+
+# 2. on the suspect host: collect (prints the archive name and its SHA-256)
+ssh root@SUSPECT 'bash /root/collect_case.sh'                 # triage only, ~1 minute
+ssh root@SUSPECT 'bash /root/collect_case.sh -w 30m -i 5s'    # + watch 30 min, a snapshot every 5 s
+
+# 3. on your workstation: copy the case back and check it arrived intact
+scp 'root@SUSPECT:/var/tmp/procsnap-*.tar.gz*' .
+sha256sum -c procsnap-*.tar.gz.sha256                         # must print OK
+
+# 4. on your workstation: analyse
+./procsnap_analyze.py procsnap-*.tar.gz --vt-key "YOUR_VIRUSTOTAL_KEY"   # or --offline
+```
+
+5. Open `procsnap-<host>-<time>-analysis/triage.html` (plus `timeline.html` if you used
+   `-w`). The report adds a Threat intel tab and location / VirusTotal columns.
+
+Tips: add `-o /mnt/usb` to `collect_case.sh` to write the case to removable media instead
+of the suspect disk. The VirusTotal key is optional (free tier: 4 lookups a minute,
+results are cached) and only hashes and IPs are sent, never files.
+
+### Recipe C: record the host over time, then look back (snapshots)
+
+The collector records processes, listening ports and connections every few seconds, so
+you can later answer "what was running at 03:14?" or "what changed in the last hour?".
+
+```bash
+# 1. start recording (stop with Ctrl+C; nothing recorded is lost)
+sudo ./procsnap.py collect -i 5s -o ./watch
+#    or a fixed length: 360 snapshots x 5 s = 30 minutes, then it stops by itself
+sudo ./procsnap.py collect -i 5s --count 360 -o ./watch
+
+# 2. build the report (works while the collector is still running, from a second terminal)
+sudo ./procsnap_viz.py ./watch -o timeline.html
+```
+
+3. Open `timeline.html` in a browser. **Findings** lists what looks suspicious
+   (executables in `/tmp`, deleted binaries, beacons, new listeners). In **Snapshots**,
+   click one snapshot to see the full host state at that moment, or Shift-click a second
+   one to see what appeared and disappeared in between.
+
+Quick answers in the terminal, without the HTML:
+
+```bash
+sudo ./procsnap.py snapshots ./watch                        # list snapshots: #1, #2, ... with times
+sudo ./procsnap.py diff ./watch --at first --at last -v     # what changed from start to end
+sudo ./procsnap.py show ./watch --at 03:14:00               # the host as it was at 03:14
+```
+
+To keep recording permanently (survives reboots, logs in `/var/log/procsnap`):
+
+```bash
+sudo install -o root -g root -m 0755 procsnap.py /usr/local/sbin/procsnap.py
+sudo /usr/local/sbin/procsnap.py install-service -i 10s --retain-days 14
+# later: sudo ./procsnap_viz.py /var/log/procsnap --since 2h -o timeline.html
+# stop:  sudo systemctl disable --now procsnap
+```
+
+### Common problems
+
+| Message | Fix |
+|---|---|
+| `Permission denied` or many findings missing | run with `sudo` |
+| `ModuleNotFoundError: No module named 'procsnap'` | `procsnap_viz.py` / `procsnap_analyze.py` must be in the same folder as `procsnap.py` |
+| `procsnap.py not found next to this script` | copy `procsnap.py` and `collect_case.sh` into the same folder |
+| `not root-owned or is group/world-writable` (install-service) | install a root-owned copy first, as shown above |
+| A few "high" findings on a normal server | read each card: your own logins, admin tools or vendor agents can match. The *why* line says what to check |
+
 ## Why this exists
 
 Live analysis of an infected Linux machine is one of the hardest jobs in incident

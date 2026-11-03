@@ -91,6 +91,9 @@
   in the idle time between snapshots, in 1 MB steps (a 500 MB binary never delays a
   snapshot), and reported as `exe_hash` events. Each hash is bound to the file's
   device/inode/size/mtime, so a recycled PID never inherits another binary's hash.
+- `collect_case.sh` wrote the archive's full path into the `.sha256` file, so
+  `sha256sum -c` failed once the case was copied to the analysis machine. It now records
+  the bare file name.
 - `tests/live_attack_sim.sh` uses per-run paths and ports, so concurrent runs no
   longer delete each other's plants.
 - Independent review fixes:

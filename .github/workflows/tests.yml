@@ -47,6 +47,8 @@ jobs:
       - name: target -> analysis flow (collect_case.sh, then procsnap_analyze.py --offline)
         run: |
           sudo bash scripts/collect_case.sh -o /tmp/out -w 10s -i 2s
+          # the .sha256 must verify after the case is copied elsewhere (bare file name, no path)
+          sudo sh -c 'mkdir -p /tmp/ws && cp /tmp/out/procsnap-*.tar.gz* /tmp/ws/ && cd /tmp/ws && sha256sum -c procsnap-*.tar.gz.sha256'
           # /tmp/out is root-only (evidence), so root's shell must expand the glob
           sudo sh -c './procsnap_analyze.py /tmp/out/procsnap-*.tar.gz --offline -o /tmp/analysis'
           sudo test -s /tmp/analysis/triage.html
