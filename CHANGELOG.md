@@ -4,7 +4,7 @@
 
 ### Added
 - **`triage`**: one-shot compromise assessment of a live Debian/Ubuntu host. About
-  85 checks across processes, network, kernel, accounts, SSH, sudo, PAM, dynamic
+  130 finding types across processes, network, kernel, accounts, SSH, sudo, PAM, dynamic
   linker, cron/at, systemd, other autostarts, shell init, history, logins, log
   integrity, dpkg package integrity and a filesystem sweep. Every finding has a
   severity, a MITRE ATT&CK mapping, an explanation and evidence. See
@@ -81,11 +81,18 @@
 - Snapshot deep links in the timeline report (`timeline.html#snaps=1,12`), README
   rewritten (problem statement, full command reference, snapshot-chain explanation),
   screenshots from a synthetic demo host (`docs/demo/plant_demo_host.sh`).
+- GitHub Actions CI: lint and unit tests on Python 3.8–3.12, plus a live job as root
+  (attack simulation, collector self-test, full triage, collect → analyse flow).
+- README screenshots in the reports' dark theme.
 
 ### Fixed
 - Collector: hashing executables inside the snapshot stalled the first snapshot for
   ~16 s on a cold cache, so the collector was blind at start. Binaries are now hashed
-  in the idle time between snapshots and reported as `exe_hash` events.
+  in the idle time between snapshots, in 1 MB steps (a 500 MB binary never delays a
+  snapshot), and reported as `exe_hash` events. Each hash is bound to the file's
+  device/inode/size/mtime, so a recycled PID never inherits another binary's hash.
+- `tests/live_attack_sim.sh` uses per-run paths and ports, so concurrent runs no
+  longer delete each other's plants.
 - Independent review fixes:
   - `collect_case.sh` no longer deletes the case when packaging fails, and exits
     non-zero on packaging or triage failure. It never runs `procsnap.py` from the
@@ -98,8 +105,8 @@
   - Archive extraction keeps leading-dot names, tolerates duplicate members, and
     caps the expanded size (decompression bombs).
   - Report placeholders are filled in a single pass.
-  - dpkg-diverted files and the Ubuntu-minimal MOTD artefact (in containers) are no
-    longer reported.
+  - dpkg-diverted files and the Ubuntu-minimal MOTD artefact (containers and VMs,
+    content-checked) are no longer reported.
   - `install-service` quotes paths and warns when the script is not root-owned.
   - Tests skip cleanly without `chattr` or `nc`.
 - **Security:** the HTML reports embedded host data with `json.dumps` inside a
