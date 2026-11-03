@@ -816,7 +816,7 @@ def main():
         if ext:
             print(f"\nexternal connections ({len(ext)}):")
             for r in ext[:20]:
-                print(f"  {r[c('direction')]:<8} {r[c('process')]}({r[c('pid')]}) user={r[c('user')]}"
+                print(f"  {str(r[c('direction')] or '?'):<8} {r[c('process')]}({r[c('pid')]}) user={r[c('user')]}"
                       f" -> {r[c('remote')]}:{r[c('rport')]}  [{r[c('location')] or '?'}]"
                       f"  ipVT={r[c('ip VT')] or '-'}  exeVT={r[c('exe VT')] or '-'}")
     for n in notes:

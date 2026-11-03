@@ -136,6 +136,66 @@ def exe_sha256(pid: int, cache: dict, cap: int = 512 << 20, cached_only: bool = 
     return cache[key]
 
 
+class ChunkHasher:
+    """Resumable SHA-256 of one queued executable at a time, in 1 MB steps.
+
+    A job is (pid, start, comm, exe, (dev, ino, size, mtime_ns)) captured when the
+    process was first seen. The file is opened through /proc/<pid>/exe and checked
+    against that identity, so a recycled PID can never lend another binary's hash.
+    Once open, the descriptor keeps the file readable even if the process exits or
+    the binary is deleted.
+    """
+
+    def __init__(self, cache):
+        self.cache = cache
+        self.job = self.fh = self.h = None
+
+    def busy(self):
+        return self.job is not None
+
+    def start(self, job):
+        self.job, ident = job, job[4]
+        if ident in self.cache:                       # same binary already hashed
+            self.fh, self.h = None, None
+            return
+        try:
+            self.fh = open(f"/proc/{job[0]}/exe", "rb")
+            st = os.fstat(self.fh.fileno())
+            if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != ident:
+                raise OSError("pid reused or binary replaced")
+            if st.st_size > 512 << 20:
+                raise OSError("too large")
+            self.h = hashlib.sha256()
+        except OSError:                               # gone, recycled, replaced, too big
+            self.close()
+            self.h = None
+
+    def step(self, deadline):
+        """Hash until done or until `deadline`. -> (job, sha) when finished, else None."""
+        job = self.job
+        if self.fh is None:                            # cached, gone, or refused
+            self.job = None
+            return job, self.cache.get(job[4])
+        while time.time() < deadline:
+            b = self.fh.read(1 << 20)
+            if not b:
+                sha = self.h.hexdigest()
+                self.cache[job[4]] = sha
+                self.close()
+                self.job = None
+                return job, sha
+            self.h.update(b)
+        return None
+
+    def close(self):
+        if self.fh:
+            try:
+                self.fh.close()
+            except OSError:
+                pass
+        self.fh = None
+
+
 def hex_ip(h: str) -> str:
     """/proc/net/* stores addresses as little-endian hex words."""
     try:
@@ -450,6 +510,7 @@ def cmd_collect(a):
     peak_rss: dict = {}
     hcache: dict = {}
     hqueue: list = []
+    hasher = ChunkHasher(hcache)
     n = 0
 
     while running:
@@ -485,7 +546,15 @@ def cmd_collect(a):
                     if known:
                         ev["sha256"] = known
                     else:
-                        hqueue.append((rec["pid"], rec["start"], rec["comm"], rec["exe"]))
+                        try:                       # remember WHICH file, not just the pid
+                            xs = os.stat(f"/proc/{rec['pid']}/exe")
+                            job = (rec["pid"], rec["start"], rec["comm"], rec["exe"],
+                                   (xs.st_dev, xs.st_ino, xs.st_size, xs.st_mtime_ns))
+                            # processes born after snapshot 1 are the interesting ones:
+                            # they go ahead of the cold-start backlog
+                            hqueue.insert(0, job) if n else hqueue.append(job)
+                        except OSError:
+                            pass
                 par = by_pid.get(rec["ppid"])
                 if par:
                     ev["pcomm"] = par["comm"]
@@ -557,14 +626,20 @@ def cmd_collect(a):
             break
         deadline = t0 + a.interval
         while running and time.time() < deadline:
-            if hqueue and deadline - time.time() > 0.05:
-                pid, start, comm, exe = hqueue.pop(0)          # idle-time hashing
-                sha = exe_sha256(pid, hcache)
-                if sha:
-                    w.emit({"ts": round(time.time(), 3), "ev": "exe_hash", "pid": pid,
-                            "start": start, "comm": comm, "exe": exe, "sha256": sha})
+            # idle-time hashing in 1 MB steps: a 500 MB binary is spread over as many
+            # idle windows as it needs and never delays the next snapshot
+            if hasher.busy() or hqueue:
+                if not hasher.busy():
+                    hasher.start(hqueue.pop(0))
+                done = hasher.step(deadline - 0.02)
+                if done:
+                    job, sha = done
+                    if sha:
+                        w.emit({"ts": round(time.time(), 3), "ev": "exe_hash", "pid": job[0],
+                                "start": job[1], "comm": job[2], "exe": job[3], "sha256": sha})
                 continue
             time.sleep(min(0.25, max(0.0, deadline - time.time())))
+    hasher.close()
 
     w.emit({"ts": round(time.time(), 3), "ev": "collector_stop", "snapshots": n})
     w.close()
@@ -3005,8 +3080,9 @@ class Triage:
             st = self.lstat(fp)
             if not st or stat.S_ISDIR(st.st_mode):
                 continue
-            if self.hostinfo.get("container") and f == "60-unminimize":
-                continue                    # Ubuntu minimal image artefact
+            if f == "60-unminimize" and "minimized" in (self.read(fp, 1 << 16) or "") and \
+                    not SUSPECT_CMD.search(self.read(fp, 1 << 16) or ""):
+                continue                    # Ubuntu minimal images (VMs and containers)
             txt = self.read(fp, 1 << 20) or ""
             pk = self.owner(fp)
             flags = []

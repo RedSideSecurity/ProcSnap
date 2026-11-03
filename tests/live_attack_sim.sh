@@ -13,8 +13,12 @@
 set -u
 [ "$(id -u)" = 0 ] || { echo "run as root (needs packet sockets, runuser, /proc of other users)"; exit 2; }
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-CASE="${1:-/tmp/psnap-sim-case}"
-SIM=/tmp/psnap-sim
+CASE="${1:-/tmp/psnap-sim-case.$$}"
+# unique per run: concurrent runs (parallel CI jobs, two analysts) must not
+# delete each other's plants or fight over ports
+SIM=/tmp/psnap-sim.$$
+SHMX=/dev/shm/psnap-sim-x.$$
+P1=$((40000 + $$ % 10000)); P2=$((P1 + 10000))
 PIDS=()
 
 cleanup() {
@@ -22,10 +26,10 @@ cleanup() {
   # (never 'pkill -f': it would also match whoever ran this script)
   for p in "${PIDS[@]:-}"; do kill -- -"$p" 2>/dev/null; kill "$p" 2>/dev/null; done
   sleep 0.3
-  rm -rf "$SIM" /dev/shm/psnap-sim-x
+  rm -rf "$SIM" "$SHMX"
 }
 trap cleanup EXIT
-rm -rf "$SIM" /dev/shm/psnap-sim-x; mkdir -p "$SIM/..."
+rm -rf "$SIM" "$SHMX"; mkdir -p "$SIM/..."
 spawn() { setsid "$@" </dev/null >/dev/null 2>&1 & PIDS+=($!); }
 
 echo "[*] planting"
@@ -38,9 +42,9 @@ cp /bin/sleep "$SIM/gone"; spawn "$SIM/gone" 301; sleep 0.3; rm -f "$SIM/gone"
 # 4 miner name
 cp /bin/sleep "$SIM/xmrig"; spawn "$SIM/xmrig" 302
 # 5 reverse shell: bash whose stdin/stdout is a TCP socket (to a local listener)
-spawn python3 -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",47011)); s.listen(1); c,_=s.accept(); time.sleep(300)  # psnap-sim'
+spawn python3 -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",'"$P1"')); s.listen(1); c,_=s.accept(); time.sleep(300)  # psnap-sim'
 sleep 0.5
-spawn bash -c 'exec 0<>/dev/tcp/127.0.0.1/47011 1>&0; sleep 303; : psnap-sim'
+spawn bash -c "exec 0<>/dev/tcp/127.0.0.1/$P1 1>&0; sleep 303; : psnap-sim"
 # 6 LD_PRELOAD of an unpackaged library
 cp "$(ldconfig -p | awk '/libz\.so\.1 /{print $NF; exit}')" "$SIM/libsim.so"
 spawn env LD_PRELOAD="$SIM/libsim.so" sleep 304
@@ -50,9 +54,9 @@ spawn runuser -u www-data -- bash -c 'sleep 305; : psnap-sim'
 spawn python3 -c 'import socket,time; s=socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0); time.sleep(300)  # psnap-sim'
 # 9 bind shell shape: netcat listening (skipped when nc is not installed)
 HAVE_NC=0
-command -v nc >/dev/null && { HAVE_NC=1; spawn nc -l 127.0.0.1 47012; }
+command -v nc >/dev/null && { HAVE_NC=1; spawn nc -l 127.0.0.1 "$P2"; }
 # 10 ELF dropped in /dev/shm
-cp /bin/true /dev/shm/psnap-sim-x
+cp /bin/true "$SHMX"
 # 11 hidden "..." directory in /tmp  (created above)
 # 12 download-and-decode style command line
 spawn bash -c 'echo cHNuYXAtc2ltCg== | base64 -d >/dev/null; sleep 306; :'
@@ -64,26 +68,27 @@ echo "[*] triage"
 rm -rf "$CASE"
 python3 "$HERE/procsnap.py" triage -o "$CASE" -q --limit 25 --walk-budget 300
 echo "[*] verifying"
-python3 - "$CASE/triage.json" "$HAVE_NC" <<'EOF'
+python3 - "$CASE/triage.json" "$HAVE_NC" "$SIM" "$SHMX" "$P2" <<'EOF'
 import json, sys
 r = json.load(open(sys.argv[1]))
 have_nc = sys.argv[2] == "1"
+sim, shmx, p2 = sys.argv[3], sys.argv[4], sys.argv[5]
 fs = r["findings"]
 want = [
   ("memfd-exe",             "psnap-sim",      "fileless process (memfd)"),
   ("kthread-masquerade",    "kworker/1:3",    "fake kernel thread"),
-  ("exe-deleted",           "/tmp/psnap-sim/gone", "deleted executable"),
+  ("exe-deleted",           sim + "/gone",    "deleted executable"),
   ("miner",                 "xmrig",          "miner name"),
   ("reverse-shell",         "bash",           "reverse shell (TCP stdin)"),
   ("ld-preload-env",        "libsim.so",      "LD_PRELOAD injection"),
   ("service-spawned-shell", "www-data",       "shell as www-data"),
   ("raw-socket",            "packet",         "packet socket"),
-  ("listener-shell-tool",   "47012",          "netcat bind listener"),
-  ("dropped-file",          "psnap-sim-x",    "ELF in /dev/shm"),
-  ("hidden-dir-tmp",        "psnap-sim/...",  "hidden '...' dir"),
+  ("listener-shell-tool",   p2,               "netcat bind listener"),
+  ("dropped-file",          shmx,             "ELF in /dev/shm"),
+  ("hidden-dir-tmp",        sim + "/...",     "hidden '...' dir"),
   ("suspicious-cmdline",    "base64 -d",      "decode-and-run cmdline"),
   ("cwd-world-writable",    "/dev/shm",       "cwd in /dev/shm"),
-  ("exe-world-writable",    "/tmp/psnap-sim", "exe in /tmp"),
+  ("exe-world-writable",    sim,              "exe in /tmp"),
 ]
 if not have_nc:
     print("  SKIP  netcat bind listener         (nc not installed)")
