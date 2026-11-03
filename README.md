@@ -1,5 +1,10 @@
 # ProcSnap
 
+[![tests](https://github.com/RedSideSecurity/ProcSnap/actions/workflows/tests.yml/badge.svg)](https://github.com/RedSideSecurity/ProcSnap/actions/workflows/tests.yml)
+![python](https://img.shields.io/badge/python-3.8%E2%80%933.12-blue)
+![dependencies](https://img.shields.io/badge/dependencies-none%20(stdlib)-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-lightgrey)
+
 **Live incident-response triage for Linux servers (Debian and Ubuntu).**
 Copy one Python file to a suspect host, run it, and within about a minute you know
 whether the host is compromised, how the attacker got in, and how they are staying.
@@ -215,11 +220,14 @@ and their hashes.
 ## Testing
 
 ```bash
-python3 -m unittest discover -s tests -v   # 37 tests: a compromised Debian rootfs with 63 planted
+python3 -m unittest discover -s tests -v   # 42 tests: a compromised Debian rootfs with 63 planted
                                            # techniques + the analyser against a mock VirusTotal/ip-api
 sudo tests/live_attack_sim.sh              # 14 harmless live attack simulations on this host, then cleanup
 sudo tests/collector_selftest.sh           # collector: flags, beacon detection, deleted binaries
 ```
+
+GitHub Actions runs the unit tests on Python 3.8–3.12 and the live tests as root on an
+Ubuntu runner for every push ([.github/workflows/tests.yml](.github/workflows/tests.yml)).
 
 The offline suite also asserts that clean controls stay quiet (genuine `sshd`, stock
 `pam_permit`, `alias ls`, a setuptools `.pth` hook), so false positives are tested too.

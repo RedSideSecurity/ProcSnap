@@ -1,0 +1,65 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit tests (Python ${{ matrix.python }})
+    # 22.04: the last runner image with prebuilt Python 3.8
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: lint
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install --quiet pyflakes
+          python -m pyflakes procsnap.py procsnap_analyze.py procsnap_viz.py tests/*.py
+          bash -n scripts/collect_case.sh tests/live_attack_sim.sh tests/collector_selftest.sh docs/demo/plant_demo_host.sh
+      - name: unit tests (offline fixture + analyser against a mock VirusTotal / ip-api)
+        run: python -m unittest discover -s tests -v
+
+  live:
+    name: live tests as root (triage, attack simulation, collector, case flow)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: live attack simulation (14 harmless techniques, verified then removed)
+        run: sudo tests/live_attack_sim.sh /tmp/sim-case
+      - name: collector self-test (flags, beacon detection, deleted binaries)
+        run: sudo tests/collector_selftest.sh /tmp/collector-case
+      - name: full triage of the runner
+        run: |
+          sudo ./procsnap.py triage -o /tmp/triage --limit 20
+          sudo python3 -c "import json; r=json.load(open('/tmp/triage/triage.json')); print(r['counts']); assert not [e for e in r['errors'] if 'Error' in e['error']], r['errors']"
+      - name: target -> analysis flow (collect_case.sh, then procsnap_analyze.py --offline)
+        run: |
+          sudo bash scripts/collect_case.sh -o /tmp/out -w 10s -i 2s
+          sudo ./procsnap_analyze.py /tmp/out/procsnap-*.tar.gz --offline -o /tmp/analysis
+          sudo test -s /tmp/analysis/triage.html
+          sudo test -s /tmp/analysis/timeline.html
+      - name: keep the reports
+        if: always()
+        run: sudo chmod -R a+rX /tmp/triage /tmp/analysis /tmp/sim-case 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports
+          path: |
+            /tmp/triage/triage.html
+            /tmp/analysis/triage.html
+            /tmp/analysis/timeline.html
+            /tmp/sim-case/triage.html
+          if-no-files-found: ignore
