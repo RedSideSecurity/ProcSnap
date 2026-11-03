@@ -47,7 +47,8 @@ jobs:
       - name: target -> analysis flow (collect_case.sh, then procsnap_analyze.py --offline)
         run: |
           sudo bash scripts/collect_case.sh -o /tmp/out -w 10s -i 2s
-          sudo ./procsnap_analyze.py /tmp/out/procsnap-*.tar.gz --offline -o /tmp/analysis
+          # /tmp/out is root-only (evidence), so root's shell must expand the glob
+          sudo sh -c './procsnap_analyze.py /tmp/out/procsnap-*.tar.gz --offline -o /tmp/analysis'
           sudo test -s /tmp/analysis/triage.html
           sudo test -s /tmp/analysis/timeline.html
       - name: keep the reports
